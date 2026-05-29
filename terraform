@@ -1,0 +1,180 @@
+✅ MODUL B — Terraform AWS (END TO END SETUP)
+🧱 1. Struktur Project (WAJIB)
+
+Buat folder ini dulu:
+
+lks2026-infra/
+
+Isi file:
+
+main.tf
+vpc.tf
+security.tf
+ecr.tf
+ecs.tf
+alb.tf
+cloudfront.tf
+variables.tf
+outputs.tf
+terraform.tfvars
+⚙️ 2. STEP 1 — AWS BACKEND (SANGAT PENTING)
+
+Di main.tf:
+
+terraform {
+  required_version = ">= 1.5"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+
+  backend "s3" {
+    bucket         = "lks2026-tfstate"
+    key            = "infra/terraform.tfstate"
+    region         = "ap-southeast-3"
+    dynamodb_table = "lks2026-tf-lock"
+    encrypt        = true
+  }
+}
+⚠️ WAJIB dibuat dulu di AWS:
+
+Sebelum terraform init, kamu harus bikin:
+
+1. S3 Bucket
+lks2026-tfstate
+2. DynamoDB Table (lock state)
+Table name: lks2026-tf-lock
+Partition key: LockID (String)
+🌐 3. STEP 2 — PROVIDER AWS
+
+Masih di main.tf:
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = "LKS2026"
+      Environment = "Production"
+      ManagedBy   = "Terraform"
+    }
+  }
+}
+🧩 4. STEP 3 — VARIABLES
+
+variables.tf
+
+variable "aws_region" {
+  default = "ap-southeast-3"
+}
+
+variable "vpc_cidr" {
+  default = "10.0.0.0/16"
+}
+
+variable "public_cidrs" {
+  default = ["10.0.1.0/24", "10.0.2.0/24"]
+}
+
+variable "private_cidrs" {
+  default = ["10.0.3.0/24", "10.0.4.0/24"]
+}
+
+variable "azs" {
+  default = ["ap-southeast-3a", "ap-southeast-3b"]
+}
+🌍 5. STEP 4 — VPC (SUDAH BENAR TAPI ADA TAMBAHAN PENTING)
+
+Yang kamu punya sudah bagus.
+
+TAPI kurang ini:
+
+➜ Route Table wajib
+
+Tambahkan:
+
+resource "aws_route_table" "public" {
+  vpc_id = aws_vpc.main.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.main.id
+  }
+}
+
+resource "aws_route_table_association" "public" {
+  count          = length(aws_subnet.public)
+  subnet_id      = aws_subnet.public[count.index].id
+  route_table_id = aws_route_table.public.id
+}
+🔐 6. SECURITY (WAJIB UNTUK ECS + ALB)
+
+security.tf
+
+resource "aws_security_group" "alb_sg" {
+  vpc_id = aws_vpc.main.id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+📦 7. PERINTAH JALAN (URUTAN BENAR)
+
+Jalankan ini:
+
+terraform init
+
+Kalau error:
+
+cek AWS credential
+cek region S3 bucket
+terraform fmt -recursive
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+🚨 ERROR YANG PALING SERING TERJADI
+❌ 1. ExpiredToken
+
+➡️ AWS login sudah expired
+
+✔ Solusi:
+
+aws configure
+❌ 2. S3 bucket not found
+
+➡️ backend belum dibuat
+
+✔ Solusi:
+buat manual di AWS console
+
+❌ 3. DynamoDB lock error
+
+➡️ table belum ada
+
+❌ 4. Region mismatch
+
+➡️ S3 beda region dengan terraform
+
+📌 NEXT STEP (SETELAH INI)
+
+Kalau kamu sudah sampai sini, kita lanjut:
+
+Modul B lanjutan:
+ECS Cluster (Fargate)
+Task Definition Node.js Cluster
+ECR Push Docker image
+ALB routing ke ECS
+CloudFront + S3 frontend
