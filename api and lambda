@@ -1,0 +1,490 @@
+Berikut tata cara lengkap dari nol sampai API Gateway + Lambda + DynamoDB berjalan dan bisa dites di Postman untuk kebutuhan LKS/AWS.
+
+Arsitektur
+Postman
+    |
+    v
+API Gateway (HTTP API)
+    |
+    v
+Lambda (Python 3.12)
+    |
+    v
+DynamoDB (ItemsTable)
+STEP 1 — Buat DynamoDB
+
+Masuk ke:
+
+AWS DynamoDB Console
+
+Create Table
+
+Isi:
+
+Field	Value
+Table name	ItemsTable
+Partition Key	id
+Type	String
+
+Klik Create Table
+
+Tunggu status:
+
+Active
+STEP 2 — Buat IAM Role Lambda
+
+Masuk:
+
+IAM Console
+
+Create Role
+
+Pilih:
+
+AWS Service
+
+Service:
+
+Lambda
+
+Next
+
+Tambahkan policy:
+
+AWSLambdaBasicExecutionRole
+
+dan
+
+AmazonDynamoDBFullAccess
+
+Role name:
+
+LambdaDynamoDBRole
+
+Create Role.
+
+STEP 3 — Buat Lambda Function
+
+Masuk:
+
+AWS Lambda Console
+
+Create Function
+
+Pilih:
+
+Author from scratch
+
+Isi:
+
+Function Name : ItemsAPI
+Runtime       : Python 3.12
+Architecture  : x86_64
+
+Execution Role:
+
+Use Existing Role
+
+Pilih:
+
+LambdaDynamoDBRole
+
+Create Function.
+
+STEP 4 — Masukkan Source Code
+
+Pada tab:
+
+Code
+
+hapus kode default lalu paste:
+
+import json
+import boto3
+import os
+from datetime import datetime
+
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table(os.environ['TABLE_NAME'])
+
+def lambda_handler(event, context):
+
+    method = event.get('httpMethod')
+
+    if not method:
+        method = event['requestContext']['http']['method']
+
+    path = event.get('path', '')
+
+    if not path:
+        path = event['requestContext']['http']['path']
+
+    # GET ALL ITEMS
+    if method == 'GET' and path == '/items':
+
+        response = table.scan()
+
+        return respond(
+            200,
+            response.get('Items', [])
+        )
+
+    # GET ITEM BY ID
+    elif method == 'GET' and '/items/' in path:
+
+        item_id = path.split('/')[-1]
+
+        response = table.get_item(
+            Key={'id': item_id}
+        )
+
+        return respond(
+            200,
+            response.get('Item', {})
+        )
+
+    # CREATE ITEM
+    elif method == 'POST' and path == '/items':
+
+        body = json.loads(
+            event.get('body', '{}')
+        )
+
+        item = {
+            'id': body.get(
+                'id',
+                str(datetime.now().timestamp())
+            ),
+            'name': body.get('name', ''),
+            'createdAt': datetime.now().isoformat()
+        }
+
+        table.put_item(Item=item)
+
+        return respond(201, item)
+
+    # DELETE ITEM
+    elif method == 'DELETE' and '/items/' in path:
+
+        item_id = path.split('/')[-1]
+
+        table.delete_item(
+            Key={'id': item_id}
+        )
+
+        return respond(
+            200,
+            {'message': 'deleted'}
+        )
+
+    return respond(
+        404,
+        {'error': 'not found'}
+    )
+
+def respond(status, body):
+
+    return {
+        'statusCode': status,
+        'headers': {
+            'Content-Type':
+            'application/json',
+
+            'Access-Control-Allow-Origin':
+            '*'
+        },
+        'body': json.dumps(body)
+    }
+
+Klik:
+
+Deploy
+STEP 5 — Tambah Environment Variable
+
+Masih di Lambda.
+
+Masuk:
+
+Configuration
+
+↓
+
+Environment Variables
+
+↓
+
+Edit
+
+Tambah:
+
+Key   : TABLE_NAME
+Value : ItemsTable
+
+Save.
+
+STEP 6 — Test Lambda
+
+Klik:
+
+Test
+
+Create Event.
+
+Isi:
+
+{
+  "httpMethod": "GET",
+  "path": "/items"
+}
+
+Save.
+
+Klik:
+
+Test
+
+Jika berhasil:
+
+{
+  "statusCode": 200
+}
+STEP 7 — Buat API Gateway
+
+Masuk:
+
+Amazon API Gateway Console
+
+Klik:
+
+Create API
+
+Pilih:
+
+HTTP API
+
+↓
+
+Build
+STEP 8 — Integrasi Lambda
+
+Klik:
+
+Add Integration
+
+Pilih:
+
+Lambda
+
+Function:
+
+ItemsAPI
+
+Next.
+
+STEP 9 — Buat Routes
+
+Tambahkan route berikut:
+
+Route 1
+GET /items
+
+Integration:
+
+ItemsAPI
+Route 2
+POST /items
+
+Integration:
+
+ItemsAPI
+Route 3
+GET /items/{id}
+
+Integration:
+
+ItemsAPI
+Route 4
+DELETE /items/{id}
+
+Integration:
+
+ItemsAPI
+STEP 10 — Aktifkan CORS
+
+Masuk:
+
+CORS
+
+Isi:
+
+Allow Origins : *
+Allow Headers : *
+Allow Methods : GET
+                POST
+                DELETE
+
+Save.
+
+STEP 11 — Deploy API
+
+Klik:
+
+Deployments
+
+↓
+
+Create Stage
+
+Nama:
+
+production
+
+Deploy.
+
+STEP 12 — Ambil Endpoint
+
+Contoh:
+
+https://abc123.execute-api.ap-southeast-3.amazonaws.com
+
+URL final:
+
+https://abc123.execute-api.ap-southeast-3.amazonaws.com/items
+
+Catat URL tersebut.
+
+STEP 13 — Test di Postman
+Buat Collection
+LKS2026 API
+Environment
+
+Buat Environment:
+
+LKS2026
+
+Variable:
+
+base_url
+
+Value:
+
+https://abc123.execute-api.ap-southeast-3.amazonaws.com
+TEST 1 — POST Item
+
+Method:
+
+POST
+
+URL:
+
+{{base_url}}/items
+
+Body → Raw → JSON
+
+{
+  "id": "001",
+  "name": "Laptop"
+}
+
+Response:
+
+{
+  "id": "001",
+  "name": "Laptop",
+  "createdAt": "2026-06-11T12:00:00"
+}
+
+Status:
+
+201 Created
+TEST 2 — GET ALL
+
+Method:
+
+GET
+
+URL:
+
+{{base_url}}/items
+
+Response:
+
+[
+  {
+    "id": "001",
+    "name": "Laptop"
+  }
+]
+
+Status:
+
+200 OK
+TEST 3 — GET BY ID
+
+Method:
+
+GET
+
+URL:
+
+{{base_url}}/items/001
+
+Response:
+
+{
+  "id": "001",
+  "name": "Laptop"
+}
+TEST 4 — DELETE
+
+Method:
+
+DELETE
+
+URL:
+
+{{base_url}}/items/001
+
+Response:
+
+{
+  "message": "deleted"
+}
+
+Status:
+
+200 OK
+Verifikasi DynamoDB
+
+Masuk ke tabel:
+
+ItemsTable
+
+↓
+
+Explore table items
+
+Saat POST berhasil, data akan muncul:
+
+id	name
+001	Laptop
+
+Saat DELETE berhasil, data hilang dari tabel.
+
+Checklist Penilaian LKS
+
+✅ DynamoDB dibuat
+✅ Lambda Python 3.12 dibuat
+✅ IAM Role benar
+✅ Environment Variable TABLE_NAME dibuat
+✅ API Gateway HTTP API dibuat
+✅ Route GET dibuat
+✅ Route POST dibuat
+✅ Route GET {id} dibuat
+✅ Route DELETE dibuat
+✅ CORS aktif
+✅ Endpoint berhasil diakses Postman
+✅ Data tersimpan ke DynamoDB
+✅ Export Collection Postman sebagai dokumentasi
+
+Kalau muncul error saat membuat API Gateway atau Lambda (403, 500, AccessDenied, ResourceNotFoundException, dsb.), kirim screenshot/error-nya dan saya bantu sampai berhasil.
