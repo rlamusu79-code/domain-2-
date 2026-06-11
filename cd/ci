@@ -1,0 +1,451 @@
+Berikut tata cara lengkap Modul B – CI/CD Pipeline ECS Fargate + ECR + CodeBuild + CodeDeploy + CodePipeline (Blue/Green Deployment) sampai berhasil deploy otomatis.
+
+1. Pastikan Infrastruktur Dasar Sudah Ada
+
+Sebelum membuat CI/CD, harus sudah ada:
+
+✅ VPC
+
+✅ Public Subnet 2 AZ
+
+✅ Private Subnet 2 AZ
+
+✅ Internet Gateway
+
+✅ NAT Gateway
+
+✅ ECS Cluster
+
+✅ ECS Service (Fargate)
+
+✅ Application Load Balancer (ALB)
+
+✅ Target Group Blue
+
+✅ Target Group Green
+
+✅ ECR Repository
+
+Jika belum ada, buat dulu.
+
+2. Buat Repository ECR
+
+Masuk ke:
+
+Amazon ECR Console
+
+Create Repository
+
+Nama:
+
+lks2026-app
+
+Catat URI:
+
+123456789012.dkr.ecr.ap-southeast-3.amazonaws.com/lks2026-app
+3. Siapkan Project Node.js
+
+Struktur:
+
+lks2026-app/
+│
+├── app.js
+├── package.json
+├── Dockerfile
+├── buildspec.yml
+├── appspec.yaml
+└── taskdef.json
+4. Dockerfile
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install
+
+COPY . .
+
+EXPOSE 3000
+
+CMD ["node","app.js"]
+5. Buildspec.yml
+
+File:
+
+version: 0.2
+
+env:
+  variables:
+    REGION: ap-southeast-3
+    ECR_REPO: lks2026-app
+    CONTAINER_NAME: lks2026-app
+
+phases:
+  pre_build:
+    commands:
+      - ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - ECR_URI=$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com/$ECR_REPO
+      - aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_URI
+      - IMAGE_TAG=$CODEBUILD_RESOLVED_SOURCE_VERSION
+
+  build:
+    commands:
+      - docker build -t $ECR_URI:$IMAGE_TAG .
+      - docker build -t $ECR_URI:latest .
+
+  post_build:
+    commands:
+      - docker push $ECR_URI:$IMAGE_TAG
+      - docker push $ECR_URI:latest
+      - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $ECR_URI:$IMAGE_TAG > imagedefinitions.json
+
+artifacts:
+  files:
+    - imagedefinitions.json
+    - appspec.yaml
+    - taskdef.json
+6. Appspec.yaml
+
+File ini dipakai CodeDeploy.
+
+version: 1
+
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: <TASK_DEFINITION>
+        LoadBalancerInfo:
+          ContainerName: lks2026-app
+          ContainerPort: 3000
+7. Taskdef.json
+
+Ambil dari ECS Task Definition lalu simpan.
+
+Contoh:
+
+{
+  "family": "lks2026-app",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "containerDefinitions": [
+    {
+      "name": "lks2026-app",
+      "image": "IMAGE1_NAME",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "protocol": "tcp"
+        }
+      ]
+    }
+  ]
+}
+8. Push Source ke GitHub
+
+Buat repository GitHub.
+
+Contoh:
+
+git init
+
+git add .
+
+git commit -m "initial"
+
+git branch -M main
+
+git remote add origin https://github.com/username/lks2026-app.git
+
+git push -u origin main
+9. Buat IAM Role CodeBuild
+
+Masuk:
+
+IAM → Roles
+
+Create Role
+
+Service:
+
+CodeBuild
+
+Policy:
+
+AmazonEC2ContainerRegistryPowerUser
+
+AmazonECS_FullAccess
+
+CloudWatchLogsFullAccess
+
+Tambahkan inline policy:
+
+{
+  "Version":"2012-10-17",
+  "Statement":[
+    {
+      "Effect":"Allow",
+      "Action":"*",
+      "Resource":"*"
+    }
+  ]
+}
+
+(untuk lab/LKS biasanya diperbolehkan)
+
+10. Buat CodeBuild Project
+
+Masuk ke:
+
+AWS CodeBuild Console
+
+Create Project
+
+Nama:
+
+lks2026-build
+
+Source:
+
+GitHub
+
+Repository:
+
+lks2026-app
+
+Environment:
+
+Managed Image
+Amazon Linux
+
+Centang:
+
+Privileged
+
+(PENTING supaya Docker build berjalan)
+
+Buildspec:
+
+Use buildspec.yml
+
+Role:
+
+CodeBuildRole
+
+Create Build Project
+
+11. Buat CodeDeploy Application
+
+Masuk:
+
+AWS CodeDeploy Console
+
+Create Application
+
+Type:
+
+ECS
+
+Nama:
+
+lks2026-codedeploy
+12. Buat Deployment Group
+
+Nama:
+
+lks2026-deployment-group
+
+Cluster:
+
+lks2026-cluster
+
+Service:
+
+lks2026-service
+
+Deployment Type:
+
+Blue/Green
+13. Konfigurasi Target Group
+
+Pilih:
+
+Blue Target Group
+
+lks-blue-tg
+
+Green Target Group
+
+lks-green-tg
+14. Konfigurasi Listener
+
+Production Listener:
+
+80
+
+Test Listener:
+
+8080
+
+ALB:
+
+lks2026-alb
+15. Deployment Settings
+
+Traffic Routing:
+
+All At Once
+
+atau
+
+Linear 10% every 1 minute
+
+Untuk LKS biasanya:
+
+All At Once
+16. Buat CodePipeline
+
+Masuk:
+
+AWS CodePipeline Console
+
+Create Pipeline
+
+Nama:
+
+lks2026-pipeline
+Source Stage
+
+Provider:
+
+GitHub
+
+Repository:
+
+lks2026-app
+
+Branch:
+
+main
+Build Stage
+
+Provider:
+
+CodeBuild
+
+Project:
+
+lks2026-build
+Deploy Stage
+
+Provider:
+
+CodeDeploy ECS
+
+Application:
+
+lks2026-codedeploy
+
+Deployment Group:
+
+lks2026-deployment-group
+17. Jalankan Pipeline
+
+Commit perubahan:
+
+git add .
+
+git commit -m "version 2"
+
+git push origin main
+18. Verifikasi Pipeline
+
+Urutan status:
+
+Source      SUCCESS
+
+Build       SUCCESS
+
+Deploy      SUCCESS
+
+Jika semua hijau:
+
+Succeeded
+
+berarti pipeline berhasil.
+
+19. Uji Blue/Green
+
+Ubah halaman:
+
+res.send("Version 2");
+
+Commit:
+
+git add .
+git commit -m "v2"
+git push
+
+Lihat:
+
+CodeDeploy
+
+akan muncul:
+
+Blue Environment
+↓
+Green Environment Created
+↓
+Health Check Passed
+↓
+Traffic Shift
+↓
+Old Environment Terminated
+20. Simulasi Rollback
+
+Buat aplikasi error:
+
+throw new Error("Failed");
+
+Push lagi.
+
+CodeDeploy akan:
+
+Deploy Failed
+Rollback Started
+Traffic Returned to Blue
+
+Ini membuktikan Zero Downtime Deployment berhasil, karena user tetap mengakses versi lama saat versi baru gagal.
+
+Arsitektur Akhir
+GitHub
+   │
+   ▼
+CodePipeline
+   │
+   ├── Source
+   │
+   ├── CodeBuild
+   │      │
+   │      └── Push Docker Image
+   │              │
+   │              ▼
+   │             ECR
+   │
+   ▼
+CodeDeploy ECS
+   │
+   ├── Blue Task
+   ├── Green Task
+   │
+   ▼
+Application Load Balancer
+   │
+   ▼
+Users
+
+Ini adalah skenario CI/CD ECS Fargate Blue/Green yang biasanya digunakan pada kompetisi LKS Cloud Computing karena memenuhi syarat otomatis build, otomatis deploy, rollback otomatis, dan zero downtime.
